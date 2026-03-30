@@ -1,8 +1,15 @@
-# frozen_string_literal: true
-
-require_relative "omni_event/version"
+require "omni_event/version"
+require "omni_event/engine"
+require "omni_event/configuration"
+require "omni_event/base_processor"
 
 module OmniEvent
-  class Error < StandardError; end
-  # Your code goes here...
+  class << self
+    attr_accessor :configuration
+  end
+
+  def self.configure
+    self.configuration ||= Configuration.new
+    yield(configuration)
+  end
 end

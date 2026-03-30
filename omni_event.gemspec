@@ -3,37 +3,36 @@
 require_relative "lib/omni_event/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "omni_event"
+  spec.name    = "omni_event"
   spec.version = OmniEvent::VERSION
-  spec.authors = ["TODO: Write your name"]
-  spec.email = ["TODO: Write your email address"]
+  spec.authors = ["Antonio Neto"]
+  spec.email   = ["antoniocneto.dev@gmail.com"]
 
-  spec.summary = "TODO: Write a short summary, because RubyGems requires one."
-  spec.description = "TODO: Write a longer description or delete this line."
-  spec.homepage = "TODO: Put your gem's website or public repo URL here."
-  spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.2.0"
-  spec.metadata["allowed_push_host"] = "TODO: Set to your gem server 'https://example.com'"
-  spec.metadata["homepage_uri"] = spec.homepage
-  spec.metadata["source_code_uri"] = "TODO: Put your gem's public repo URL here."
-  spec.metadata["changelog_uri"] = "TODO: Put your gem's CHANGELOG.md URL here."
+  spec.summary     = "Rails Engine for unified Webhook ingestion, Polymorphic Logging, and Process Traceability."
+  spec.description = "OmniEvent unifies external event ingestion with detailed internal auditing via a step-based pipeline and asynchronous monitoring."
+  spec.homepage    = "https://github.com/antoniocneto/omni_event"
+  spec.license     = "MIT"
+  spec.required_ruby_version = ">= 3.0.0"
 
-  # Specify which files should be added to the gem when it is released.
-  # The `git ls-files -z` loads the files in the RubyGem that have been added into git.
-  gemspec = File.basename(__FILE__)
-  spec.files = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
-    ls.readlines("\x0", chomp: true).reject do |f|
-      (f == gemspec) ||
-        f.start_with?(*%w[bin/ Gemfile .gitignore .rspec spec/])
+  spec.metadata["allowed_push_host"] = "https://rubygems.org"
+  spec.metadata["homepage_uri"]      = spec.homepage
+  spec.metadata["source_code_uri"]   = spec.homepage
+
+  spec.files = Dir.chdir(__dir__) do
+    `git ls-files -z`.split("\x0").reject do |f|
+      (File.expand_path(f) == __FILE__) ||
+        f.start_with?(*%w[bin/ test/ spec/ .git .circleci appveyor])
     end
   end
-  spec.bindir = "exe"
-  spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
+
+  spec.bindir        = "exe"
+  spec.executables   = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  # Uncomment to register a new dependency of your gem
-  # spec.add_dependency "example-gem", "~> 1.0"
+  spec.add_dependency "rails", ">= 6.1"
+  spec.add_dependency "httparty", "~> 0.21"
 
-  # For more information and examples about making a new gem, check out our
-  # guide at: https://bundler.io/guides/creating_gem.html
+  spec.add_development_dependency "rspec-rails"
+  spec.add_development_dependency "sqlite3"
+  spec.add_development_dependency "factory_bot_rails"
 end
