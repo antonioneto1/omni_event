@@ -1,156 +1,443 @@
 # 🚀 OmniEvent
+
 > *"One Gem to rule them all, One Gem to find them, One Gem to bring all logs, and in the shadows, trace them."*
 
+[![Gem Version](https://img.shields.io/badge/gem-v0.1.1-blue.svg)](#)
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)](#)
-[![Gem Version](https://img.shields.io/badge/gem-v1.0.0-blue.svg)](#)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rails Version](https://img.shields.io/badge/rails-6.1+-red.svg)](#)
 
-**OmniEvent** is a robust, production-ready Ruby on Rails Engine designed to unify the system's event lifecycle. It bridges the gap between external Webhook ingestion and internal process auditing, transforming complex background logic into a single, traceable flow.
+**OmniEvent** is a production-ready Rails Engine that unifies your system's entire event lifecycle — from secure external webhook ingestion to detailed internal process auditing — through a single, traceable pipeline.
+
+---
+
+## Table of Contents
+
+- [Key Features](#-key-features)
+- [Installation](#️-installation)
+- [Configuration](#-configuration)
+- [Receiving Webhooks](#-receiving-webhooks)
+- [Processing Pipeline](#-processing-pipeline)
+- [Polymorphic Logging](#-polymorphic-logging)
+- [Security](#-security)
+- [Database Maintenance](#️-database-maintenance)
+- [Testing](#-testing)
+- [Docker Development](#-docker-development)
 
 ---
 
 ## 🌟 Key Features
 
-* **Polymorphic Logging**: Attach logs to any model (`Master`, `Order`, `User`, etc.) using a unified, high-performance architecture.
-* **Step Pipeline**: Organize complex business logic into traceable methods with automatic error capturing and business-context logging.
-* **Secure Webhooks**: Built-in Token authentication and IP Whitelisting, configurable per Notifier (Client).
-* **Async Monitoring**: Native, non-blocking integration with **New Relic Insights** via ActiveJob for high-performance telemetry.
-* **Smart Cleanup**: Built-in Rake tasks for data retention, keeping your production database lean and healthy.
-* **Zero-Boilerplate DX**: Clean syntax inspired by Rails callbacks with a Devise-like installation process.
+- **Secure Webhook Receiver** — token auth, IP whitelisting, HMAC signature verification, and replay attack protection out of the box.
+- **Step Pipeline** — organize complex business logic into traceable steps with automatic error capturing and context logging.
+- **Polymorphic Logging** — attach structured logs to any model (`Order`, `User`, `Shipment`, etc.) with a unified API.
+- **Processor Registry** — map each webhook source (Notifier) to its own processor class via configuration.
+- **Async Monitoring** — non-blocking New Relic Insights integration via ActiveJob.
+- **Smart Cleanup** — built-in Rake task for data retention based on configurable `retention_days`.
+- **Zero-Boilerplate DX** — Devise-like installation, Rails callback-inspired syntax.
 
 ---
 
-## 🛠 Installation
+## 🛠️ Installation
 
-1. Add this line to your application's `Gemfile`:
-
-    ```ruby
-    gem 'omni_event'
-    ```
-
-2. Execute the installer to generate migrations, configuration files, and local proxy models:
-
-    ```bash
-    bundle install
-    rails generate omni_event:install
-    rails db:migrate
-    ```
-
-3. Mount the engine in your `config/routes.rb`:
-
-    ```ruby
-    mount OmniEvent::Engine => "/omni_events"
-    ```
-
----
-
-## 💡 How to Use
-
-### 1. Define a Processor (The Pipeline)
-
-Forget messy `begin/rescue` blocks. Define your business logic as clear steps. OmniEvent automatically handles the logging and error context for each stage.
+**1. Add to your Gemfile:**
 
 ```ruby
-# app/services/webhooks/siscomex_processor.rb
-class SiscomexProcessor < OmniEvent::BaseProcessor
-  steps :validate_payload,
-        :send_to_government_api,
-        :update_internal_status
-
-  def validate_payload
-    raise "Invalid Master ID" if event.payload[:master_id].blank?
-  end
-
-  def send_to_government_api
-    # Your external API integration logic (e.g., Siscomex, SAP, etc.)
-    ExternalApi.post(event.payload)
-  end
-
-  def update_internal_status
-    event.loggable.update!(status: :processed)
-  end
-end
+gem 'omni_event'
 ```
 
-### 2. Native-like Logging
+**2. Run the installer:**
 
-Once installed, use the `Log` class directly. It feels like a native part of your app but carries all of OmniEvent's tracking power.
+```bash
+bundle install
+rails generate omni_event:install
+rails db:migrate
+```
+
+The generator creates:
+- `config/initializers/omni_event.rb` — your configuration file
+- `app/models/log.rb` — local proxy for `OmniEvent::Log`
+- `app/models/webhook_event.rb` — local proxy for `OmniEvent::WebhookEvent`
+
+**3. Mount the engine in `config/routes.rb`:**
 
 ```ruby
-Log.create!(
-  loggable: @master,
-  action_type: :system_info,
-  content: "Starting bulk manifest synchronization for CEVA Logistics"
-)
+mount OmniEvent::Engine => "/omni_events"
+# Exposes: POST /omni_events/receiver/:token
 ```
 
 ---
 
-## 🔧 Customization & Extensibility
+## ⚙️ Configuration
 
-### Custom Log Types
-
-Define your own business-specific log levels in the initializer to categorize events beyond simple "info" or "error".
+All options live in `config/initializers/omni_event.rb`:
 
 ```ruby
-# config/initializers/omni_event.rb
 OmniEvent.configure do |config|
+  # ── Monitoring ─────────────────────────────────────────────────────────────
+  config.new_relic_enabled    = true
+  config.new_relic_api_key    = ENV['NEW_RELIC_KEY']
+  config.new_relic_account_id = ENV['NEW_RELIC_ACCOUNT_ID']
+
+  # ── Processing ─────────────────────────────────────────────────────────────
+  config.process_async  = true  # false = synchronous (useful for testing)
+  config.retention_days = 30    # used by rake omni_event:cleanup
+
+  # ── Custom log types ────────────────────────────────────────────────────────
+  # Define domain-specific action types for your business context.
   config.custom_log_types = {
     system_info:       0,
     system_error:      1,
-    cargo_tracking:    10,
-    fiscal_validation: 20
+    payment_received:  10,
+    shipment_update:   20,
+    fiscal_validation: 30
+  }
+
+  # ── Processor registry ──────────────────────────────────────────────────────
+  # Maps each Notifier name to the processor class that handles its events.
+  config.processors = {
+    "Stripe"    => Webhooks::StripeProcessor,
+    "Siscomex"  => Webhooks::SiscomexProcessor,
+    "DHL"       => Webhooks::DHLProcessor
   }
 end
 ```
 
-### Extending Local Models
+---
 
-Since the installer creates `app/models/log.rb` in your app, you can add custom scopes or methods:
+## 📡 Receiving Webhooks
+
+### 1. Create a Notifier
+
+A **Notifier** represents one external webhook source (e.g. a payment gateway, a logistics partner). Each has its own security configuration.
 
 ```ruby
-# app/models/log.rb
+# Minimal — token auth only
+notifier = OmniEvent::Notifier.create!(name: "Stripe")
+# => token is auto-generated: SecureRandom.hex(24)
+
+# Full security configuration
+notifier = OmniEvent::Notifier.create!(
+  name:                "DHL Logistics",
+  secret_key:          ENV['DHL_WEBHOOK_SECRET'], # enables HMAC verification
+  timestamp_tolerance: 300,                        # 5-minute replay window (seconds)
+  check_ip:            true,
+  allowed_ips:         ["185.60.216.35", "185.60.218.35"]
+)
+
+# The webhook endpoint for this notifier:
+# POST /omni_events/receiver/#{notifier.token}
+puts notifier.token  # => "a3f9c2b1e4d7..."
+```
+
+### 2. Register the processor
+
+In `config/initializers/omni_event.rb`, map the notifier name to a processor class:
+
+```ruby
+config.processors = {
+  "DHL Logistics" => Webhooks::DHLProcessor
+}
+```
+
+### 3. Send a webhook
+
+The partner sends a `POST` request to your endpoint:
+
+```bash
+curl -X POST https://yourapp.com/omni_events/receiver/a3f9c2b1e4d7... \
+  -H "Content-Type: application/json" \
+  -H "X-OmniEvent-Timestamp: $(date +%s)" \
+  -H "X-OmniEvent-Signature: sha256=$(echo -n '{"event":"shipment.updated"}' | openssl dgst -sha256 -hmac 'your_secret')" \
+  -d '{"event":"shipment.updated","tracking":"TRK-001","status":"delivered"}'
+```
+
+The receiver will:
+1. Validate payload size (max 1MB)
+2. Authenticate via token
+3. Check IP whitelist (if enabled)
+4. Verify HMAC signature + timestamp (if `secret_key` is set)
+5. Persist the `WebhookEvent`
+6. Dispatch to the registered processor (async or sync)
+
+---
+
+## 🔄 Processing Pipeline
+
+Define your business logic as a sequence of named steps. OmniEvent automatically logs any step failure with full context (step name, error class, backtrace).
+
+```ruby
+# app/services/webhooks/dhl_processor.rb
+class Webhooks::DHLProcessor < OmniEvent::BaseProcessor
+  steps :validate_payload,
+        :update_shipment_status,
+        :notify_customer,
+        :record_audit_log
+
+  def validate_payload
+    raise "Missing tracking number" if event.payload[:tracking].blank?
+    raise "Unknown status '#{event.payload[:status]}'" unless valid_status?
+  end
+
+  def update_shipment_status
+    shipment.update!(status: event.payload[:status])
+  end
+
+  def notify_customer
+    CustomerMailer.shipment_update(shipment).deliver_later
+  end
+
+  def record_audit_log
+    Log.create!(
+      loggable:    shipment,
+      action_type: :shipment_update,
+      content:     "DHL updated status to '#{event.payload[:status]}'",
+      metadata:    { carrier: "DHL", source: "webhook", timestamp: Time.current.iso8601 }
+    )
+  end
+
+  private
+
+  def shipment
+    @shipment ||= Shipment.find_by!(tracking_number: event.payload[:tracking])
+  end
+
+  def valid_status?
+    %w[in_transit out_for_delivery delivered returned failed].include?(event.payload[:status])
+  end
+end
+```
+
+When a step raises an error, OmniEvent automatically creates a `system_error` log with the context and re-raises so the job can retry:
+
+```ruby
+# Auto-created by OmniEvent on step failure:
+OmniEvent::Log.create!(
+  loggable:    event,
+  action_type: :system_error,
+  content:     "FAILURE in step [Validate payload]: Missing tracking number",
+  metadata:    {
+    error_class: "RuntimeError",
+    method:      :validate_payload,
+    backtrace:   [...]
+  }
+)
+```
+
+---
+
+## 📋 Polymorphic Logging
+
+Use `Log` (the local proxy generated by the installer) to attach structured log entries to any model.
+
+```ruby
+# Attach to any ActiveRecord model
+Log.create!(
+  loggable:    @order,
+  action_type: :payment_received,
+  content:     "Payment of R$ 1.250,00 confirmed via PIX",
+  metadata:    { gateway: "Stripe", charge_id: "ch_abc123", amount_cents: 125_000 }
+)
+
+# Query logs for a specific record
+@order.logs.where(action_type: :system_error).order(created_at: :desc)
+
+# Custom scopes on your local Log model (app/models/log.rb)
 class Log < OmniEvent::Log
-  scope :critical_logistics, -> { where(action_type: 20).where('created_at > ?', 1.day.ago) }
+  scope :recent_errors, -> { where(action_type: :system_error).where('created_at > ?', 24.hours.ago) }
+  scope :for_gateway,   ->(gw) { where("metadata->>'gateway' = ?", gw) }
+end
+```
+
+### Custom log types
+
+Define your domain vocabulary in the initializer:
+
+```ruby
+config.custom_log_types = {
+  system_info:       0,
+  system_error:      1,
+  payment_received:  10,
+  payment_failed:    11,
+  shipment_update:   20,
+  fiscal_validation: 30
+}
+```
+
+---
+
+## 🔒 Security
+
+OmniEvent provides **4 independent security layers**, all configurable per Notifier. Each layer is opt-in and backward compatible.
+
+### Layer 1 — Token Authentication
+
+Every webhook endpoint is identified by a unique, cryptographically random token (48-char hex). Requests without a valid token receive `401 Unauthorized`.
+
+```ruby
+notifier = OmniEvent::Notifier.create!(name: "Partner")
+# Endpoint: POST /omni_events/receiver/#{notifier.token}
+```
+
+### Layer 2 — IP Whitelisting
+
+Restrict which IPs can send requests to each notifier.
+
+```ruby
+OmniEvent::Notifier.create!(
+  name:        "Stripe",
+  check_ip:    true,
+  allowed_ips: ["54.187.174.169", "54.187.205.235"]
+)
+```
+
+Requests from non-whitelisted IPs receive `403 Forbidden`.
+
+### Layer 3 — HMAC Signature Verification
+
+The gold standard for webhook security. The sender signs the raw request body with a shared secret using HMAC-SHA256. OmniEvent verifies the signature using constant-time comparison (preventing timing attacks).
+
+```ruby
+OmniEvent::Notifier.create!(
+  name:       "Stripe",
+  secret_key: ENV['STRIPE_WEBHOOK_SECRET']  # e.g. "whsec_abc123..."
+)
+```
+
+**Required header from the sender:**
+```
+X-OmniEvent-Signature: sha256=<HMAC-SHA256(secret_key, raw_body)>
+```
+
+**Example — generating the signature (sender side):**
+
+```ruby
+# Ruby
+signature = "sha256=#{OpenSSL::HMAC.hexdigest('SHA256', secret_key, raw_body)}"
+
+# Node.js
+const sig = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex')
+
+# Python
+import hmac, hashlib
+sig = 'sha256=' + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+```
+
+### Layer 4 — Replay Attack Protection
+
+When `secret_key` is set, OmniEvent also validates a timestamp header to reject requests that are too old — preventing replay attacks where a valid captured request is re-sent.
+
+```ruby
+OmniEvent::Notifier.create!(
+  name:                "Stripe",
+  secret_key:          ENV['STRIPE_WEBHOOK_SECRET'],
+  timestamp_tolerance: 300  # reject requests older than 5 minutes (default)
+)
+```
+
+**Required header from the sender:**
+```
+X-OmniEvent-Timestamp: <Unix timestamp, e.g. 1711800000>
+```
+
+Set `timestamp_tolerance: 0` to disable timestamp checking while keeping signature verification.
+
+### Layer 5 — Payload Size Limit
+
+All requests are automatically capped at **1MB**. Oversized payloads receive `413 Payload Too Large` before any processing occurs.
+
+### Complete security setup example
+
+```ruby
+# Notifier with all layers active
+notifier = OmniEvent::Notifier.create!(
+  name:                "DHL Logistics",
+  secret_key:          ENV['DHL_WEBHOOK_SECRET'],
+  timestamp_tolerance: 300,
+  check_ip:            true,
+  allowed_ips:         ["185.60.216.35"]
+)
+
+# Check which security features are active
+notifier.signature_verification?  # => true
+notifier.check_ip?                 # => true
+```
+
+### Security response codes
+
+| Condition | HTTP Status |
+|---|---|
+| Payload > 1MB | `413 Payload Too Large` |
+| Invalid or missing token | `401 Unauthorized` |
+| IP not whitelisted | `403 Forbidden` |
+| Invalid/missing signature | `401 Unauthorized` |
+| Timestamp outside window | `401 Unauthorized` |
+
+---
+
+## 🗄️ Database Maintenance
+
+Prevent database bloating by periodically deleting old records:
+
+```bash
+rake omni_event:cleanup
+# => [OmniEvent] Cleanup complete: 1543 logs and 892 webhook events deleted (older than 30 days).
+```
+
+Configure the retention period in your initializer:
+
+```ruby
+config.retention_days = 90  # keep records for 90 days
+```
+
+Schedule it in production (e.g. with `whenever` or Heroku Scheduler):
+
+```ruby
+# config/schedule.rb (whenever gem)
+every 1.day, at: '2:00 am' do
+  rake "omni_event:cleanup"
 end
 ```
 
 ---
 
-## ⚙️ Advanced Configuration
+## 🧪 Testing
 
-### 1. Webhook Security
-
-OmniEvent secures your endpoints out of the box. Each Notifier (client) has its own security profile:
-
-```ruby
-notifier = OmniEvent::Notifier.create!(
-  name:        "Logistics Partner",
-  token:       SecureRandom.hex(24),
-  check_ip:    true,
-  allowed_ips: ["192.168.1.1"]
-)
-# Endpoint: POST /omni_events/receiver/#{notifier.token}
-```
-
-### 2. Database Maintenance (Auto-Cleanup)
-
-Prevent database bloating by running the built-in cleanup task based on your `retention_days` setting:
+### Unit tests (no database required)
 
 ```bash
-rake omni_event:cleanup
+bundle exec rspec
 ```
 
-### 3. Monitoring (New Relic)
+### Integration tests (requires the dummy Rails app)
 
-OmniEvent dispatches events to New Relic Insights asynchronously.
+```bash
+INTEGRATION=1 bundle exec rspec
+```
+
+### Testing your processors
 
 ```ruby
-OmniEvent.configure do |config|
-  config.new_relic_enabled = true
-  config.new_relic_api_key = ENV['NR_KEY']
-  config.process_async    = true
+RSpec.describe Webhooks::DHLProcessor do
+  let(:notifier) { create(:omni_event_notifier) }
+  let(:event)    { create(:omni_event_webhook_event, webhook_notifier: notifier, payload: { tracking: "TRK-001", status: "delivered" }) }
+
+  it "updates the shipment status" do
+    shipment = create(:shipment, tracking_number: "TRK-001")
+    described_class.new(event).process!
+    expect(shipment.reload.status).to eq("delivered")
+  end
+
+  it "creates an audit log" do
+    create(:shipment, tracking_number: "TRK-001")
+    expect { described_class.new(event).process! }.to change(Log, :count).by(1)
+  end
+
+  it "creates a system_error log when a step fails" do
+    allow_any_instance_of(described_class).to receive(:validate_payload).and_raise("boom")
+    expect { described_class.new(event).process! }.to raise_error("boom")
+    expect(OmniEvent::Log.last.action_type).to eq("system_error")
+  end
 end
 ```
 
@@ -158,12 +445,11 @@ end
 
 ## 🐳 Docker Development
 
-This gem is built with a container-first mindset.
-
 ```bash
 docker compose up -d
 docker compose exec app bash
 bundle exec rspec
+rake omni_event:cleanup
 ```
 
 ---
@@ -172,4 +458,4 @@ bundle exec rspec
 
 The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
 
-Developed with ❤️ by Antonio
+Developed with ❤️ by [Antonio Neto](https://github.com/antonioneto1)

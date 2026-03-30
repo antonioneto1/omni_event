@@ -1,22 +1,46 @@
 # frozen_string_literal: true
 
 require 'logger'
-require 'active_support/core_ext/string/inflections'
 
-# Minimal Rails stubs so unit tests run without a full Rails application.
-# Integration tests requiring ActiveRecord models need a spec/dummy app.
-module Rails
-  def self.logger
-    @logger ||= Logger.new(nil)
+# ── Integration mode ──────────────────────────────────────────────────────────
+# Set INTEGRATION=1 to load the full dummy Rails app and run model/job specs.
+#
+#   INTEGRATION=1 bundle exec rspec
+#
+if ENV['INTEGRATION']
+  ENV['RAILS_ENV'] ||= 'test'
+  require File.expand_path('dummy/config/environment', __dir__)
+  require 'rspec/rails'
+  require 'factory_bot_rails'
+
+  RSpec.configure do |config|
+    config.include FactoryBot::Syntax::Methods
+    config.use_transactional_fixtures = true
+
+    config.before(:suite) do
+      ActiveRecord::Schema.verbose = false
+      load File.expand_path('dummy/db/schema.rb', __dir__)
+    end
   end
 
-  class Engine
-    def self.inherited(base); end
-    def self.isolate_namespace(mod); end
+# ── Unit mode (default) ───────────────────────────────────────────────────────
+# Minimal Rails stubs — no database, no full app. Fast.
+else
+  require 'active_support/core_ext/string/inflections'
+
+  module Rails
+    def self.logger
+      @logger ||= Logger.new(nil)
+    end
+
+    class Engine
+      def self.inherited(base); end
+      def self.isolate_namespace(mod); end
+    end
   end
+
+  require 'omni_event'
 end
-
-require 'omni_event'
 
 RSpec.configure do |config|
   config.expect_with :rspec do |expectations|
@@ -31,7 +55,7 @@ RSpec.configure do |config|
   config.filter_run_when_matching :focus
   config.disable_monkey_patching!
   config.warnings = true
-  config.order = :random
+  config.order    = :random
   Kernel.srand config.seed
 
   config.before(:each) do

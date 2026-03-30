@@ -7,7 +7,8 @@ module OmniEvent
                   :new_relic_account_id,
                   :retention_days,
                   :process_async,
-                  :custom_log_types
+                  :custom_log_types,
+                  :processors
 
     def initialize
       @new_relic_enabled    = false
@@ -16,6 +17,7 @@ module OmniEvent
       @retention_days       = 30
       @process_async        = true
       @custom_log_types     = { system_info: 0, system_error: 1 }
+      @processors           = {}
     end
   end
 end
