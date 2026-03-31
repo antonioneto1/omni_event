@@ -6,11 +6,11 @@ Gem::Specification.new do |spec|
   spec.name    = "omni_events"
   spec.version = OmniEvent::VERSION
   spec.authors = ["Antonio Neto"]
-  spec.email   = ["antoniocneto.dev@gmail.com"]
+  spec.email   = ["antonioneto1.dev@gmail.com"]
 
   spec.summary     = "Rails Engine for unified Webhook ingestion, Polymorphic Logging, and Process Traceability."
   spec.description = "OmniEvent unifies external event ingestion with detailed internal auditing via a step-based pipeline and asynchronous monitoring."
-  spec.homepage    = "https://github.com/antoniocneto/omni_event"
+  spec.homepage    = "https://github.com/antonioneto1/omni_event"
   spec.license     = "MIT"
   spec.required_ruby_version = ">= 3.0.0"
 
