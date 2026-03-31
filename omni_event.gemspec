@@ -3,7 +3,7 @@
 require_relative "lib/omni_event/version"
 
 Gem::Specification.new do |spec|
-  spec.name    = "omni_event"
+  spec.name    = "omni_events"
   spec.version = OmniEvent::VERSION
   spec.authors = ["Antonio Neto"]
   spec.email   = ["antoniocneto.dev@gmail.com"]
@@ -20,8 +20,7 @@ Gem::Specification.new do |spec|
 
   spec.files = Dir.chdir(__dir__) do
     `git ls-files -z`.split("\x0").reject do |f|
-      (File.expand_path(f) == __FILE__) ||
-        f.start_with?(*%w[bin/ test/ spec/ .git .circleci appveyor])
+      (f == __FILE__) || f.match(%r{\A(?:(?:bin|test|spec|features)/|\.(?:git|travis|circleci)|appveyor)}) || f.end_with?(".gem")
     end
   end
 
@@ -29,10 +28,10 @@ Gem::Specification.new do |spec|
   spec.executables   = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  spec.add_dependency "rails", ">= 6.1"
+  spec.add_dependency "rails", "~> 6.1"
   spec.add_dependency "httparty", "~> 0.21"
 
-  spec.add_development_dependency "rspec-rails"
-  spec.add_development_dependency "sqlite3"
-  spec.add_development_dependency "factory_bot_rails"
+  spec.add_development_dependency "rspec-rails", "~> 6.0"
+  spec.add_development_dependency "sqlite3", "~> 1.6"
+  spec.add_development_dependency "factory_bot_rails", "~> 6.2"
 end
