@@ -30,7 +30,7 @@
 
 - **Secure Webhook Receiver** — token auth, IP whitelisting, HMAC signature verification, and replay attack protection out of the box.
 - **Step Pipeline** — organize complex business logic into traceable steps with automatic error capturing and context logging.
-- **Polymorphic Logging** — attach structured logs to any model (`Order`, `User`, `Shipment`, etc.) with a unified API.
+- **Polymorphic Logging** — attach structured logs to any model (`Order`, `User`, `Payment`, etc.) with a unified API.
 - **Processor Registry** — map each webhook source (Notifier) to its own processor class via configuration.
 - **Async Monitoring** — non-blocking New Relic Insights integration via ActiveJob.
 - **Smart Cleanup** — built-in Rake task for data retention based on configurable `retention_days`.
@@ -89,16 +89,16 @@ OmniEvent.configure do |config|
     system_info:       0,
     system_error:      1,
     payment_received:  10,
-    shipment_update:   20,
+    user_update:       20,
     fiscal_validation: 30
   }
 
   # ── Processor registry ──────────────────────────────────────────────────────
   # Maps each Notifier name to the processor class that handles its events.
   config.processors = {
-    "Stripe"    => Webhooks::StripeProcessor,
-    "Siscomex"  => Webhooks::SiscomexProcessor,
-    "DHL"       => Webhooks::DHLProcessor
+    "PaymentGateway" => Webhooks::PaymentGatewayProcessor,
+    "BillingService" => Webhooks::BillingServiceProcessor,
+    "CrmSystem"      => Webhooks::CrmSystemProcessor
   }
 end
 ```
@@ -109,7 +109,7 @@ end
 
 ### 1. Create a Notifier
 
-A **Notifier** represents one external webhook source (e.g. a payment gateway, a logistics partner). Each has its own security configuration.
+A **Notifier** represents one external webhook source (e.g. a payment gateway, a payment processor). Each has its own security configuration.
 
 ```ruby
 # Minimal — token auth only
@@ -118,8 +118,8 @@ notifier = OmniEvent::Notifier.create!(name: "Stripe")
 
 # Full security configuration
 notifier = OmniEvent::Notifier.create!(
-  name:                "DHL Logistics",
-  secret_key:          ENV['DHL_WEBHOOK_SECRET'], # enables HMAC verification
+  name:                "Payment Gateway",
+  secret_key:          ENV['WEBHOOK_SECRET'], # enables HMAC verification
   timestamp_tolerance: 300,                        # 5-minute replay window (seconds)
   check_ip:            true,
   allowed_ips:         ["185.60.216.35", "185.60.218.35"]
@@ -136,7 +136,7 @@ In `config/initializers/omni_event.rb`, map the notifier name to a processor cla
 
 ```ruby
 config.processors = {
-  "DHL Logistics" => Webhooks::DHLProcessor
+  "Payment Gateway" => Webhooks::PaymentGatewayProcessor
 }
 ```
 
@@ -148,8 +148,8 @@ The partner sends a `POST` request to your endpoint:
 curl -X POST https://yourapp.com/omni_events/receiver/a3f9c2b1e4d7... \
   -H "Content-Type: application/json" \
   -H "X-OmniEvent-Timestamp: $(date +%s)" \
-  -H "X-OmniEvent-Signature: sha256=$(echo -n '{"event":"shipment.updated"}' | openssl dgst -sha256 -hmac 'your_secret')" \
-  -d '{"event":"shipment.updated","tracking":"TRK-001","status":"delivered"}'
+  -H "X-OmniEvent-Signature: sha256=$(echo -n '{"event":"payment.confirmed"}' | openssl dgst -sha256 -hmac 'your_secret')" \
+  -d '{"event":"payment.confirmed","charge_id":"ch_abc123","status":"paid"}'
 ```
 
 The receiver will:
@@ -167,43 +167,43 @@ The receiver will:
 Define your business logic as a sequence of named steps. OmniEvent automatically logs any step failure with full context (step name, error class, backtrace).
 
 ```ruby
-# app/services/webhooks/dhl_processor.rb
-class Webhooks::DHLProcessor < OmniEvent::BaseProcessor
+# app/services/webhooks/payment_gateway_processor.rb
+class Webhooks::PaymentGatewayProcessor < OmniEvent::BaseProcessor
   steps :validate_payload,
-        :update_shipment_status,
+        :update_payment_status,
         :notify_customer,
         :record_audit_log
 
   def validate_payload
-    raise "Missing tracking number" if event.payload[:tracking].blank?
+    raise "Missing charge ID" if event.payload[:charge_id].blank?
     raise "Unknown status '#{event.payload[:status]}'" unless valid_status?
   end
 
-  def update_shipment_status
-    shipment.update!(status: event.payload[:status])
+  def update_payment_status
+    payment.update!(status: event.payload[:status])
   end
 
   def notify_customer
-    CustomerMailer.shipment_update(shipment).deliver_later
+    CustomerMailer.payment_update(payment).deliver_later
   end
 
   def record_audit_log
     Log.create!(
-      loggable:    shipment,
-      action_type: :shipment_update,
-      content:     "DHL updated status to '#{event.payload[:status]}'",
-      metadata:    { carrier: "DHL", source: "webhook", timestamp: Time.current.iso8601 }
+      loggable:    payment,
+      action_type: :payment_processed,
+      content:     "Payment status updated to '#{event.payload[:status]}'",
+      metadata:    { gateway: "Stripe", source: "webhook", timestamp: Time.current.iso8601 }
     )
   end
 
   private
 
-  def shipment
-    @shipment ||= Shipment.find_by!(tracking_number: event.payload[:tracking])
+  def payment
+    @payment ||= Payment.find_by!(charge_id: event.payload[:charge_id])
   end
 
   def valid_status?
-    %w[in_transit out_for_delivery delivered returned failed].include?(event.payload[:status])
+    %w[paid pending failed refunded disputed].include?(event.payload[:status])
   end
 end
 ```
@@ -215,7 +215,7 @@ When a step raises an error, OmniEvent automatically creates a `system_error` lo
 OmniEvent::Log.create!(
   loggable:    event,
   action_type: :system_error,
-  content:     "FAILURE in step [Validate payload]: Missing tracking number",
+  content:     "FAILURE in step [Validate payload]: Missing charge ID",
   metadata:    {
     error_class: "RuntimeError",
     method:      :validate_payload,
@@ -259,7 +259,7 @@ config.custom_log_types = {
   system_error:      1,
   payment_received:  10,
   payment_failed:    11,
-  shipment_update:   20,
+  payment_processed: 20,
   fiscal_validation: 30
 }
 ```
@@ -351,8 +351,8 @@ All requests are automatically capped at **1MB**. Oversized payloads receive `41
 ```ruby
 # Notifier with all layers active
 notifier = OmniEvent::Notifier.create!(
-  name:                "DHL Logistics",
-  secret_key:          ENV['DHL_WEBHOOK_SECRET'],
+  name:                "Stripe Payments",
+  secret_key:          ENV['STRIPE_WEBHOOK_SECRET'],
   timestamp_tolerance: 300,
   check_ip:            true,
   allowed_ips:         ["185.60.216.35"]
@@ -418,18 +418,18 @@ INTEGRATION=1 bundle exec rspec
 ### Testing your processors
 
 ```ruby
-RSpec.describe Webhooks::DHLProcessor do
+RSpec.describe Webhooks::PaymentGatewayProcessor do
   let(:notifier) { create(:omni_event_notifier) }
-  let(:event)    { create(:omni_event_webhook_event, webhook_notifier: notifier, payload: { tracking: "TRK-001", status: "delivered" }) }
+  let(:event)    { create(:omni_event_webhook_event, webhook_notifier: notifier, payload: { charge_id: "ch_abc123", status: "paid" }) }
 
-  it "updates the shipment status" do
-    shipment = create(:shipment, tracking_number: "TRK-001")
+  it "updates the payment status" do
+    payment = create(:payment, charge_id: "ch_abc123")
     described_class.new(event).process!
-    expect(shipment.reload.status).to eq("delivered")
+    expect(payment.reload.status).to eq("paid")
   end
 
   it "creates an audit log" do
-    create(:shipment, tracking_number: "TRK-001")
+    create(:payment, charge_id: "ch_abc123")
     expect { described_class.new(event).process! }.to change(Log, :count).by(1)
   end
 
